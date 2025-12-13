@@ -1,135 +1,111 @@
 # Telegram Brain Agent: "Lord of Wisdom"
 
-A highly advanced, self-aware RAG (Retrieval-Augmented Generation) Agent for Telegram, capable of processing PDFs, Voice Notes, and Images, while answering properly formatted mathematical queries.
-
-## 🌟 Key Features
-
-### 1. Multi-Modal Ingestion
-
-- **PDF Documents**: Uploads standard PDFs, chunks them, and stores vector embeddings in Qdrant.
-- **Voice Notes**: Uses **OpenAI Whisper** to transcribe audio messages into text before processing.
-- **Images**: Uses **GPT-4o Vision** to analyze images (charts, equations) and ingest their textual description.
-- **URLs**: Scrapes and ingests web content.
-
-### 2. Intelligent Agent (LangGraph)
-
-- **Reflective Search**: Rewrites queries to be optimized for vector search.
-- **Self-Correction**: Uses a feedback loop (Grading) to ensure documents are relevant before generating an answer.
-- **Short-Circuit Logic**: **Crucial feature**. If the system is busy (e.g., uploading a large book), the Agent "short-circuits" to avoid hallucinating answers based on old data. It strictly reports the current system status.
-
-### 3. "X-Ray" Diagnostics & State Awareness
-
-- **Global Registry**: A thread-safe internal registry tracks the exact status of background tasks (e.g., "Embedding Batch 5/50").
-- **Real-Time Feedback**: Users can ask *"What are you doing?"* and get a precise technical sitrep, not a generic "Processing".
-
-### 4. Advanced Rendering
-
-- **LaTeX Support**: Automatically detects mathematical equations (e.g., `$$ E=mc^2 $$`) and renders them into high-resolution PNG images using `matplotlib`.
+**Version**: 1.0.2  
+**Architecture**: RAG + Agentic LangGraph + Multi-Modal  
+**Deployment**: Google Cloud Run (Serverless)
 
 ---
 
-## 🏗️ Architecture
+## 📖 System Overview
 
-```mermaid
-graph TD
-    User[Telegram User] -->|Webhook| Bot[FastAPI Bot Service]
-    Bot -->|Async Task| Background[Background Processor]
-    Bot -->|Query| Agent[LangGraph Agent]
-  
-    subgraph "Agent Brain"
-        Start --> Router
-        Router -->|System Busy?| SystemStatus[Status Response]
-        Router -->|PDF/URL?| Ingest[Ingestion Nodes]
-        Router -->|Question?| Reformulate[Query Reformulation]
-      
-        Reformulate --> Retrieve[Qdrant Retrieval]
-        Retrieve --> Grade[Document Grader]
-        Grade -->|Relevant| Generate[LLM Generation]
-        Grade -->|Irrelevant| Fallback
-    end
-  
-    subgraph "Ingestion Engine"
-        Ingest --> Extract[Text Extraction]
-        Extract -->|Batch=100| Embed[OpenAI Embeddings]
-        Embed --> Upsert[Qdrant Vector DB]
-      
-        Extract -.->|Update| Registry[Global Task Registry]
-        Embed -.->|Update| Registry
-    end
-  
-    SystemStatus -.->|Read| Registry
-```
-
-## 🛠️ Infrastructure & Configuration
-
-### Prerequisites
-
-- **Google Cloud Run**: For serverless hosting.
-- **Qdrant**: Vector Database (Cloud or Local).
-- **OpenAI API**: For Embeddings, Whisper, and Vision.
-- **DeepSeek API**: For main Chat Generation (can be swapped for GPT-4).
-
-### Environment Variables (.env)
-
-```bash
-TELEGRAM_BOT_TOKEN=...
-OPENAI_API_KEY=...       # For Embeddings, Whisper, Vision
-DEEPSEEK_API_KEY=...     # For Chat Logic
-QDRANT_URL=...
-QDRANT_API_KEY=...
-QDRANT_COLLECTION_NAME=telegram_brain
-```
-
-### Docker Optimization
-
-- **Base Image**: `python:3.11-slim`
-- **System Deps**: `ffmpeg` (Audio), `libgl1` (Images), `fontconfig` (Fonts).
-- **Matplotlib**: Configured with `Agg` backend for headless environments.
+This project is a high-performance **Cognitive Agent** designed to ingest complex Physics/Math content (mostly PDFs) and teach it to users with the persona of a charismatic Professor. It is not just a chatbot; it is a **State-Aware System** that knows what it is doing, remembers what you said, and visualizes what it means.
 
 ---
 
-## 🚀 Deployment Guide
+## ⚙️ Phase 1: Ingestion "The Senses"
 
-We use a custom PowerShell script `scripts/deploy.ps1` to handle the complexity of Cloud Run.
+The ingestion pipeline is designed for **Reliability** and **Scale**. It solves the "Silent Failure" problem common in serverless environments.
 
-### 1. Login to GCloud
+### 1.1 The Trigger (`bot.py`)
+- User sends a PDF.
+- The Bot **Acknowledges Immediately** ("⏳ Iniciando...") to prevent Telegram timeout.
+- It spawns a **Background Async Task** (`process_document_background`) using `asyncio.create_task`. This decouples the processing from the webhook response.
 
-```powershell
-gcloud auth login
-gcloud config set project [YOUR_PROJECT_ID]
-```
+### 1.2 The "X-Ray" Registry (`global_state.py`)
+- Before starting work, the task registers itself in a **Thread-Safe Global Dictionary** (`task_registry`).
+- Key: `chat_id`. Value: "Downloading...", "Extracting...", "Embedding Batch 5/50".
+- **Benefit**: If the user asks *"What are you doing?"*, the Bot checks this registry. If a task exists, it **Short-Circuits** the brain (see Phase 2) and reports the exact status.
 
-### 2. Run Deployment Script
-
-```powershell
-.\scripts\deploy.ps1
-```
-
-**What this script does:**
-
-1. Loads variables from `.env`.
-2. Builds the Docker Image in Google Cloud Build.
-3. Deploys to Cloud Run with **CRITICAL FLAGS**:
-   - `--memory 2Gi`: To prevent OOM crashes on large PDFs.
-   - `--cpu 2`: For faster processing.
-   - `--no-cpu-throttling`: **Essential**. Prevents CPU freeze during background ingestion.
-4. Updates the Service with the Webhook URL automatically.
+### 1.3 Optimized Ingestion (`storage.py`)
+- **Chunking**: Splits text into semantic blocks (1000 chars).
+- **Batch Processing**: Instead of calling OpenAI for every chunk (slow), it groups them into **Batches of 100**.
+- **Vector Upsert**: Pushes vectors to **Qdrant** in parallel.
+- **Resource Management**: The Cloud Run container is configured with **2GiB RAM** and **--no-cpu-throttling** to ensure this heavy process never crashes due to OOM (Out of Memory).
 
 ---
 
-## 🔍 Troubleshooting
+## 🧠 Phase 2: The Brain "The Agent"
 
-### "The document never uploads"
+The core logic is built on **LangGraph**, a directed cyclic graph that allows for reasoning loops.
 
-- **Cause**: CPU Throttling or Out of Memory (OOM).
-- **Fix**: Ensure `--no-cpu-throttling` is checked and Memory is at least 2GiB. (Already fixed in `deploy.ps1`).
+### 2.1 Contextual Memory
+- The Bot (`bot.py`) maintains a rolling window of the **Last 5 Messages** for each user.
+- **Query Reformulation**: Before searching, the Agent looks at the history.
+  - User: *"What about that chapter?"*
+  - Agent sees history: *"Previous topic: Section 3.5"*
+  - Reformulated Query: *"Summary of Section 3.5"*
+  - **Result**: Perfect context maintenance.
 
-### "The bot hallucinates status"
+### 2.2 The "Short-Circuit" Firewall (`graph.py`)
+- **Problem**: RAG bots often hallucinate if you ask "Are you done?" while they are still working, because they search the DB and find nothing.
+- **Solution**: The Router Node checks the `task_registry`.
+- If `Busy`: **STOP**. Return `[SYSTEM_STATUS]` message. Do NOT query LLM.
+- If `Free`: Proceed to Retrieval.
 
-- **Cause**: Bot confusion between RAG context and current status.
-- **Fix**: The "Short-Circuit" logic in `graph.py` forces it to ignore RAG when `[SYSTEM_STATUS]` tag is active.
+### 2.3 The "Charismatic Tutor" Persona (`nodes.py`)
+- The Generator LLM is strictly prompted to:
+  - **Internalize Knowledge**: "Treat the context as `YOUR OWN MEMORY`."
+  - **Ban Robotic Language**: Never say "According to the context".
+  - **Speak Directly**: "The definition of curl is..."
+- This creates a seamless, human-like teaching experience.
 
-### "Equations look like code"
+---
 
-- **Cause**: Matplotlib failure.
-- **Fix**: Check Dockerfile includes `fonts-dejavu` and `fontconfig`.
+## 🎨 Phase 3: The Presentation "Smart Rendering"
+
+The bot intelligently decides how to display mathematical information to keep the chat clean.
+
+### 3.1 The Heuristic Filter (`bot.py`)
+- The LLM outputs LaTeX blocks (`$$ ... $$`).
+- The Bot inspects every block:
+  - **Simple?** (Short, no symbols like `\`, `=`, `^`): e.g., `x`, `K(r)`. -> **Render as Italic Text**.
+  - **Complex?** (Integrals, Sums, Big Equations): -> **Render as Image**.
+
+### 3.2 The Render Engine (`renderer.py`)
+- Uses **Matplotlib (Agg Backend)** to draw the equation.
+- **Optimization**:
+  - DPI set to **200** (Retina quality but efficient).
+  - Tight Bounding Box (`bbox_inches='tight'`) with minimal padding (0.05).
+- **Result**: Crisp, perfectly sized physics equations that look native to the Telegram interface.
+
+---
+
+## 🚀 Deployment & Ops
+
+We use a custom PowerShell script (`scripts/deploy.ps1`) to handle the complexity of Cloud Run.
+
+### Critical Flags
+- `--memory 2Gi`: Essential for PDF processing (PDF parsers are memory hungry).
+- `--cpu 2`: Speeds up vector generation.
+- `--no-cpu-throttling`: **MANDATORY**. Without this, Cloud Run freezes the CPU as soon as the HTTP request ends, killing the background ingestion. This flag keeps the CPU alive for the background thread.
+
+### Environment Variables
+- `TELEGRAM_BOT_TOKEN`: The interface.
+- `OPENAI_API_KEY`: The Embeddings & Vision.
+- `DEEPSEEK_API_KEY`: The Brain (High intelligence, low cost).
+- `QDRANT_URL`: The Long-Term Memory.
+
+---
+
+## 🔧 Troubleshooting
+
+| Symptom | Diagnosis | Fix |
+| :--- | :--- | :--- |
+| **"The document never finishes"** | Container OOM Crash | Increase Memory to 2GiB (Done). |
+| **"Bot forgets context"** | Stateless `bot.py` | Verify `user_chat_history` is active. |
+| **"Giant Image Spam"** | Renderer Misconfig | Check `renderer.py` is at 200 DPI. |
+| **"Robotic Answers"** | Prompt Drift | Reset System Prompt in `nodes.py`. |
+
+---
+
+*Built with ❤️ by the Antigravity Team*
